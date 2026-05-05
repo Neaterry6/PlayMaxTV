@@ -83,7 +83,7 @@ async function srtUrlToVttBlobUrl(srtUrl: string): Promise<string | null> {
 // ─── Call /api/play?subjectId=ID to get streams, subtitles, audio tracks ─────
 async function fetchPlayData(subjectId: string): Promise<PlayResult> {
   console.log('[play] Fetching /api/play?subjectId=', subjectId);
-  const res = await fetch(`${SB_BASE}/play/${subjectId}`);
+  const res = await fetch(`${SB_BASE}/play?subjectId=${subjectId}`);
   if (!res.ok) throw new Error(`/api/play returned ${res.status}`);
   const json = await res.json();
   console.log('[play] Response keys:', Object.keys(json.data || json || {}));
@@ -234,11 +234,12 @@ async function fetchEpisodeStreams(
   
   const resolutions = ['1080', '720', '480', '360'];
   const streams: StreamQuality[] = resolutions.map(res => ({
-    // Use the base URL and append the required query parameters
-    proxyUrl: `${SB_BASE}/bff/stream?subjectId=${showSubjectId}&season=${episode.seasonNum}&episode=${episode.episodeNum}&resolution=${res}`,
+    // Use episode's own subjectId if available, otherwise fall back to showId+season+episode
+    proxyUrl: episode.subjectId
+      ? `${SB_BASE}/bff/stream?subjectId=${episode.subjectId}&resolution=${res}`
+      : `${SB_BASE}/bff/stream?subjectId=${showSubjectId}&season=${episode.seasonNum}&episode=${episode.episodeNum}&resolution=${res}`,
     resolutions: res,
-    // Fix quality string to include 'p' so the UI displays it correctly
-    quality: res === '1080' || res === '720' ? `${res}p HD` : `${res}p`,
+    quality: res,
   }));
 
   // Attempt to get subtitles from the main show data
