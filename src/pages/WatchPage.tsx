@@ -82,14 +82,31 @@ async function srtUrlToVttBlobUrl(srtUrl: string): Promise<string | null> {
   }
 }
 
-// ─── Call /api/play ───────────────────────────────────────────────────────────
-async function fetchPlayData(subjectId: string): Promise<PlayResult> {
-  const res = await fetch(`${SB_BASE}/play?subjectId=${subjectId}`);
-  if (!res.ok) throw new Error(`/api/play returned ${res.status}`);
-  const json = await res.json();
-  const data = json.data || json;
+// ─── Call stream-proxy edge function (server-side fetch avoids browser CORS) ─
+async function fetchPlayData(params: {
+  subjectId: string;
+  type?: 'movie' | 'tv';
+  season?: number;
+  episode?: number;
+  episodeSubjectId?: string;
+  title?: string;
+}): Promise<PlayResult> {
+  const { data, error } = await supabase.functions.invoke('stream-proxy', {
+    body: {
+      subjectId: params.subjectId,
+      id: params.subjectId,
+      type: params.type || 'movie',
+      season: params.season,
+      episode: params.episode,
+      episodeSubjectId: params.episodeSubjectId,
+      title: params.title,
+    },
+  });
 
-  const rawStreams: StreamQuality[] = (data.streams || []).map((s: Record<string, unknown>) => ({
+  if (error) throw new Error(error.message || 'stream-proxy failed');
+  if (!data) throw new Error('No stream payload from stream-proxy');
+
+  const rawStreams: StreamQuality[] = (Array.isArray(data.streams) ? data.streams : []).map((s: Record<string, unknown>) => ({
     proxyUrl: String(s.proxyUrl || s.url || ''),
     resolutions: String(s.resolutions || s.resolution || ''),
     quality: String(s.resolutions || s.resolution || ''),
@@ -98,13 +115,13 @@ async function fetchPlayData(subjectId: string): Promise<PlayResult> {
     duration: s.duration ? Number(s.duration) : undefined,
   })).filter((s: StreamQuality) => s.proxyUrl);
 
-  const subtitles: SubtitleTrack[] = (data.subtitles || []).map((s: Record<string, unknown>) => ({
+  const subtitles: SubtitleTrack[] = (Array.isArray(data.subtitles) ? data.subtitles : []).map((s: Record<string, unknown>) => ({
     language: String(s.language || ''),
     languageCode: String(s.languageCode || ''),
     url: String(s.url || ''),
   })).filter((s: SubtitleTrack) => s.url);
 
-  const audioTracks: AudioTrack[] = (data.audioTracks || []).map((a: Record<string, unknown>) => ({
+  const audioTracks: AudioTrack[] = (Array.isArray(data.audioTracks) ? data.audioTracks : []).map((a: Record<string, unknown>) => ({
     language: String(a.language || ''),
     languageCode: String(a.languageCode || ''),
     isOriginal: Boolean(a.isOriginal),
@@ -199,7 +216,13 @@ async function fetchEpisodeStreams(showSubjectId: string, episode: EpisodeInfo):
 
   if (episode.subjectId) {
     try {
-      const result = await fetchPlayData(episode.subjectId);
+      const result = await fetchPlayData({
+        subjectId: showSubjectId,
+        type: 'tv',
+        season: episode.seasonNum,
+        episode: episode.episodeNum,
+        episodeSubjectId: episode.subjectId,
+      });
       if (result.streams.length > 0) return result;
     } catch (e) {
       console.warn('[episode-stream] Episode subjectId fetch failed:', e);
@@ -620,7 +643,7 @@ export default function WatchPage() {
     setStreamError(false);
     setStreams([]);
     try {
-      const result = await fetchPlayData(subjectId);
+      const result = await fetchPlayData({ subjectId, type: 'movie' });
       if (result.streams.length > 0) {
         const sorted = [...result.streams].sort((a, b) =>
           parseInt(String(b.resolutions || 0)) - parseInt(String(a.resolutions || 0))
@@ -733,7 +756,7 @@ export default function WatchPage() {
     if (!track.subjectId) return;
     setActiveAudioIdx(idx);
     try {
-      const result = await fetchPlayData(track.subjectId);
+      const result = await fetchPlayData({ subjectId: track.subjectId, type: isTVShow ? 'tv' : 'movie' });
       if (result.streams.length > 0) {
         const sorted = [...result.streams].sort((a, b) =>
           parseInt(String(b.resolutions || 0)) - parseInt(String(a.resolutions || 0))
